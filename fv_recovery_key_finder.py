@@ -1,3 +1,60 @@
+"""Find Apple FileVault recovery keys in files and images.
+
+Dependencies
+------------
+Install the Python packages with::
+
+    python3 -m pip install requests Pillow pytesseract
+
+OCR also requires the Tesseract executable to be installed and available on
+PATH. On macOS, install it with Homebrew::
+
+    brew install tesseract
+
+Text extraction requires an Apache Tika server. It assumes a latest-full
+tika-docker (https://github.com/apache/tika-docker) is running.
+The default URL is ``http://127.0.0.1:9998``. One way to start the
+recommended full Tika image is:
+
+    docker pull apache/tika:latest-full
+    docker run -d --name tika -p 9998:9998 apache/tika:latest-full
+
+Usage
+-----
+Search a folder and write matches to ``fv_recovery_key.txt``::
+
+    python3 fv_recovery_key_finder.py /path/to/folder
+
+Show directories, files, and OCR progress while scanning::
+
+    python3 fv_recovery_key_finder.py -v /path/to/folder
+
+Use a different Tika server or output file::
+
+    python3 fv_recovery_key_finder.py \
+        --tika-server http://tika-host:9998 \
+        --output /path/to/results.txt \
+        /path/to/folder
+
+License
+-------
+This project is licensed under the MIT License. See ``LICENSE`` for the full
+license text.
+
+Acknowledgements
+----------------
+Author: Giuseppe Totaro (https://github.com/giuseppetotaro)
+
+Thanks to Francesco Cappotto for his invaluable contribution.
+
+This solution is inspired by Northloop Forensics for Bitlocker_Key_Finder:
+
+https://github.com/northloopforensics/Bitlocker_Key_Finder
+
+It uses Apache Tika for document text extraction and Tesseract through
+Pytesseract for OCR of supported images.
+"""
+
 import os
 import sys
 import requests
@@ -5,12 +62,14 @@ import re
 import argparse
 import unicodedata
 import json
+import logging
 from dataclasses import dataclass
 from PIL import Image, ImageOps
 import pytesseract
 
-# Default Tika server URL. It assumes a latest-full tika-docker (https://github.com/apache/tika-docker) is running.
+# Default Tika server URL.
 TIKA_SERVER = "http://127.0.0.1:9998"
+logger = logging.getLogger(__name__)
 
 # The pattern matches six groups of four characters, separated by dash (or other separator), and checks the surrounding characters:
 #
@@ -42,6 +101,7 @@ class ScanConfig:
     walk_dir: str
     tika_server: str
     output: str
+    verbose: bool
 
 
 def parse_args(argv=None):
@@ -55,7 +115,7 @@ def parse_args(argv=None):
     parser.add_argument("-v", dest="verbose", action="store_true",
             help="verbose mode")
     args = parser.parse_args(argv)
-    return ScanConfig(args.walk_dir, args.tika_server, args.output)
+    return ScanConfig(args.walk_dir, args.tika_server, args.output, args.verbose)
 
 def image_variants(image):
     yield "original", image
@@ -179,17 +239,20 @@ def find_results(file_path, tika_server):
 
     results = find_rk(content_text)
     if not results and is_supported_image(content_type):
-        print(f"Attempting OCR for {file_path} as it is an image but no recovery key was found in text.")
+        logger.debug(
+            "Attempting OCR for %s as it is an image but no recovery key was found in text.",
+            file_path,
+        )
         results = list(find_rk_with_ocr(file_path))
     return results
 
 
 def scan_files(config):
     for root, subdirs, files in os.walk(config.walk_dir):
-        print(f"--\nroot =  {root}")
-
-        for subdir in subdirs:
-            print("\t- subdirectory " + subdir)
+        logger.debug("Scanning directory: %s", root)
+        if config.verbose:
+            for subdir in subdirs:
+                logger.debug("  subdirectory: %s", subdir)
 
         for filename in files:
             file_path = os.path.join(root, filename)
@@ -199,11 +262,11 @@ def scan_files(config):
             if is_output_file(file_path, config.output):
                 continue
 
-            print("\t- file %s (full path: %s)" % (filename, file_path))
+            logger.debug("  file: %s", file_path)
             try:
                 results = find_results(file_path, config.tika_server)
             except (requests.exceptions.RequestException, OSError, json.JSONDecodeError) as exc:
-                print(f"Failed to extract {file_path}: {exc}", file=sys.stderr)
+                logger.warning("Failed to extract %s: %s", file_path, exc)
                 continue
 
             if results:
@@ -215,15 +278,19 @@ def scan_files(config):
 
 def main(argv=None):
     config = parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if config.verbose else logging.INFO,
+        format="%(message)s",
+    )
     version = tika_version(config.tika_server) or sys.exit("Failed to get Tika version. Please ensure the Tika server is running and accessible.")
-    print(f"Tika version = {version}")
+    logger.info("Tika version = %s", version)
     try:
-        print(f"Tesseract version = {pytesseract.get_tesseract_version()}")
+        logger.info("Tesseract version = %s", pytesseract.get_tesseract_version())
     except (OSError, pytesseract.TesseractNotFoundError):
-        print("Failed to get Tesseract version. Tesseract may not be installed or accessible for OCR.")
+        logger.warning("Failed to get Tesseract version. Tesseract may not be installed or accessible for OCR.")
 
-    print("walk_dir = " + config.walk_dir)
-    print("walk_dir (absolute) = " + os.path.abspath(config.walk_dir))
+    logger.info("walk_dir = %s", config.walk_dir)
+    logger.info("walk_dir (absolute) = %s", os.path.abspath(config.walk_dir))
 
     num_results = 0
 
@@ -232,7 +299,7 @@ def main(argv=None):
             num_results += len(results)
             print(f"{file_path} {len(results)} {results}", file=output_file)
 
-    print(f"Total results found: {num_results}")
+    logger.info("Total results found: %s", num_results)
 
 if __name__ == "__main__":
     main()

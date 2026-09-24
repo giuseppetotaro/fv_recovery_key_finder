@@ -1,30 +1,74 @@
-# fv_recovery_key_finder
-The **FileVault Recovery Key Finder** is a Python-based solution which automates the search of FileVault recovery keys within textual contents extracted from files.
+# FileVault Recovery Key Finder
 
-This solution is inspired by [Bitlocker_Key_Finder](https://github.com/northloopforensics/Bitlocker_Key_Finder).
+The **FileVault Recovery Key Finder** searches files for Apple FileVault
+recovery keys. It uses Apache Tika for document text extraction and Tesseract
+OCR for supported images.
 
-## Getting started
+## Requirements
+
+- Python 3
+- Docker, for the Apache Tika server
+- Tesseract OCR, for image scanning
+
+Install the Python dependencies:
+
+```bash
+python3 -m pip install requests Pillow pytesseract
 ```
-python3 fv_recovery_finder.py /path/to/folder
+
+On macOS, install Tesseract with Homebrew:
+
+```bash
+brew install tesseract
 ```
 
-## Installation
+Start the Apache Tika server:
 
-### Tika
-```
+```bash
 docker pull apache/tika:latest-full
-Run tika server by using the following command:
-docker run -d -p 9998:9998 apache/tika:latest-full
-Extract text API
-curl -T test.png http://localhost:9998/tika
+docker run -d --name tika -p 9998:9998 apache/tika:latest-full
 ```
 
-### Python
-```
-pip3 install requests
-```
+The default Tika server URL is `http://127.0.0.1:9998`.
 
 ## Usage
+
+Search a folder and write matches to `fv_recovery_key.txt`:
+
+```bash
+python3 fv_recovery_key_finder.py /path/to/folder
 ```
-python3 fv_recovery_key_finder.py [-h] [-t tika] [-o /path/to/output] [-v] /path/to/folder
+
+Enable verbose logging to show directories, subdirectories, files, and OCR
+progress:
+
+```bash
+python3 fv_recovery_key_finder.py -v /path/to/folder
 ```
+
+Use a different Tika server or output file:
+
+```bash
+python3 fv_recovery_key_finder.py \
+	--tika-server http://tika-host:9998 \
+	--output /path/to/results.txt \
+	/path/to/folder
+```
+
+Run `python3 fv_recovery_key_finder.py --help` for all available options.
+
+## Acknowledgements
+
+**Author:** [Giuseppe Totaro](https://github.com/giuseppetotaro)
+
+Thanks to **Francesco Cappotto** for his invaluable contribution.
+
+This project was inspired by [Bitlocker_Key_Finder](https://github.com/northloopforensics/Bitlocker_Key_Finder)
+by Northloop Forensics.
+
+## License
+
+This project is released under the [MIT License](LICENSE).
+
+Apache Tika, Tesseract, and the Python dependencies are third-party software
+and remain subject to their respective licenses.
