@@ -69,25 +69,27 @@ import pytesseract
 
 # Default Tika server URL.
 TIKA_SERVER = "http://127.0.0.1:9998"
+
+# Initialize the logger for this module.
 logger = logging.getLogger(__name__)
 
 # The pattern matches six groups of four characters, separated by dash (or other separator), and checks the surrounding characters:
 #
-# | Part               | Meaning                                                                                                   |
-# |--------------------|-----------------------------------------------------------------------------------------------------------|
-# | `(?<![A-Z0-9])`    | The preceding character, if any, must not be an ASCII letter or digit.                                    |
-# | `[A-Z0-9]{4}`      | Match the first group of exactly four letters or digits.                                                  |
-# | `(?: ... ){5}`     | Repeat the enclosed separator-and-group pattern five times. `?:` avoids creating a capturing group.       |
-# | `[ \t\r\n-]{1,12}` | Match 1–12 separator characters: spaces, tabs, carriage returns, newlines, or dashes, in any combination. |
-# | `[A-Z0-9]{4}`      | Match the next four-character group.                                                                      |
-# | `(?![A-Z0-9])`     | The following character, if any, must not be an ASCII letter or digit.                                    |
+# | Part               | Meaning                                                                                             |
+# |--------------------|-----------------------------------------------------------------------------------------------------|
+# | `(?<![A-Z0-9])`    | The preceding character, if any, must not be an ASCII letter or digit.                              |
+# | `[A-Z0-9]{4}`      | Match the first group of exactly four letters or digits.                                            |
+# | `(?: ... ){5}`     | Repeat the enclosed separator-and-group pattern five times. `?:` avoids creating a capturing group. |
+# | `[ \t\r\n-]      ` | Match one separator character: space, tab, carriage return, newline, or dash.                       |
+# | `[A-Z0-9]{4}`      | Match the next four-character group.                                                                |
+# | `(?![A-Z0-9])`     | The following character, if any, must not be an ASCII letter or digit.                              |
 #
 # The flags mean:
 # - re.IGNORECASE: accept lowercase letters too.
 # - re.ASCII: keep case-insensitive letter matching restricted to ASCII.
 KEY_PATTERN = re.compile(
     r"(?<![A-Z0-9])"
-    r"[A-Z0-9]{4}(?:[ \t\r\n-]{1,12}[A-Z0-9]{4}){5}"
+    r"[A-Z0-9]{4}(?:[ \t\r\n-][A-Z0-9]{4}){5}"
     r"(?![A-Z0-9])",
     re.IGNORECASE | re.ASCII,
 )
@@ -102,20 +104,23 @@ class ScanConfig:
     tika_server: str
     output: str
     verbose: bool
+    tesseract: bool
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
     description="Search for any Apple recovery key")
-    parser.add_argument(dest="walk_dir", metavar="/path/to/root/folder")
+    parser.add_argument(dest="walk_dir", metavar="/path/to/root/folder", help="root folder to start scanning from")
     parser.add_argument("-t", "--tika-server", metavar="tika", default=TIKA_SERVER,
             help="network address of tika server")
     parser.add_argument("-o", "--output", metavar="/path/to/output",
             default="fv_recovery_key.txt", help="output file")
-    parser.add_argument("-v", dest="verbose", action="store_true",
+    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
             help="verbose mode")
+    parser.add_argument("--no-tesseract", dest="tesseract", action="store_false",
+            help="disable tesseract OCR (default: enabled)")
     args = parser.parse_args(argv)
-    return ScanConfig(args.walk_dir, args.tika_server, args.output, args.verbose)
+    return ScanConfig(args.walk_dir, args.tika_server, args.output, args.verbose, tesseract=args.tesseract)
 
 def image_variants(image):
     yield "original", image
@@ -228,21 +233,22 @@ def is_output_file(file_path, output_path):
         return os.path.abspath(file_path) == os.path.abspath(output_path)
 
 
-def find_results(file_path, tika_server):
+def find_results(file_path, tika_server, tesseract):
     text = tika_extract(file_path, tika_server)
     content = json.loads(text)
     content_text = content.get("tk:content")
     content_type = content.get("Content-Type")
 
-    if not content_text:
-        return []
+    results = []
+    if content_text:
+        results = find_rk(content_text)
 
-    results = find_rk(content_text)
-    if not results and is_supported_image(content_type):
+    if not results and tesseract and is_supported_image(content_type): 
         logger.debug(
             "Attempting OCR for %s as it is an image but no recovery key was found in text.",
             file_path,
         )
+
         results = list(find_rk_with_ocr(file_path))
     return results
 
@@ -264,7 +270,7 @@ def scan_files(config):
 
             logger.debug("  file: %s", file_path)
             try:
-                results = find_results(file_path, config.tika_server)
+                results = find_results(file_path, config.tika_server, config.tesseract)
             except (requests.exceptions.RequestException, OSError, json.JSONDecodeError) as exc:
                 logger.warning("Failed to extract %s: %s", file_path, exc)
                 continue
@@ -282,12 +288,15 @@ def main(argv=None):
         level=logging.DEBUG if config.verbose else logging.INFO,
         format="%(message)s",
     )
+    logger.info("FileVault Recovery Key Finder.")
     version = tika_version(config.tika_server) or sys.exit("Failed to get Tika version. Please ensure the Tika server is running and accessible.")
     logger.info("Tika version = %s", version)
-    try:
-        logger.info("Tesseract version = %s", pytesseract.get_tesseract_version())
-    except (OSError, pytesseract.TesseractNotFoundError):
-        logger.warning("Failed to get Tesseract version. Tesseract may not be installed or accessible for OCR.")
+    if config.tesseract:
+        try:
+            logger.info("Tesseract version = %s", pytesseract.get_tesseract_version())
+        except (OSError, pytesseract.TesseractNotFoundError):
+            logger.warning("Failed to get Tesseract version. Tesseract may not be installed or accessible for OCR.")
+            config.tesseract = False
 
     logger.info("walk_dir = %s", config.walk_dir)
     logger.info("walk_dir (absolute) = %s", os.path.abspath(config.walk_dir))
@@ -299,7 +308,11 @@ def main(argv=None):
             num_results += len(results)
             print(f"{file_path} {len(results)} {results}", file=output_file)
 
+    logger.info("-"*80)
     logger.info("Total results found: %s", num_results)
+    if num_results:
+        logger.warning("WARNING: Always double check the file where the results were found, as OCR may not be reliable.")
+        logger.info("Output file: %s", os.path.abspath(config.output))
 
 if __name__ == "__main__":
     main()
