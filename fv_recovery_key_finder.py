@@ -67,6 +67,9 @@ from dataclasses import dataclass
 from PIL import Image, ImageOps
 import pytesseract
 
+# Version of FV Recovery Key Finder.
+VERSION = "1.0"
+
 # Default Tika server URL.
 TIKA_SERVER = "http://127.0.0.1:9998"
 
@@ -288,7 +291,7 @@ def main(argv=None):
         level=logging.DEBUG if config.verbose else logging.INFO,
         format="%(message)s",
     )
-    logger.info("FileVault Recovery Key Finder.")
+    logger.info("FileVault Recovery Key Finder. Version: %s", VERSION)
     version = tika_version(config.tika_server) or sys.exit("Failed to get Tika version. Please ensure the Tika server is running and accessible.")
     logger.info("Tika version = %s", version)
     if config.tesseract:
