@@ -22,6 +22,12 @@ On macOS, install Tesseract with Homebrew:
 brew install tesseract
 ```
 
+You can also install Tesseract with MacPorts:
+
+```bash
+sudo port install tesseract
+```
+
 Start the Apache Tika server:
 
 ```bash
